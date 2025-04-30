@@ -143,9 +143,8 @@
   (let 
     (
       (current-counter (default-to u0 (map-get? asset-history-counters asset-id)))
-      (new-counter (+ u1 (default-to u0 (map-get? asset-history-counters asset-id))))
     )
-    (map-set asset-history-counters asset-id new-counter)
+    (map-set asset-history-counters asset-id (+ current-counter u1))
     current-counter
   )
 )
@@ -156,6 +155,7 @@
     (
       (index (get-and-increment-history-counter asset-id))
     )
+    ;; Add new ownership record
     (map-set asset-ownership-history { asset-id: asset-id, index: index } 
       { 
         owner: owner, 
@@ -163,6 +163,7 @@
         to-height: u0
       }
     )
+    
     ;; If there's a previous owner, update their to-height
     (and (> index u0)
       (match (map-get? asset-ownership-history { asset-id: asset-id, index: (- index u1) })
@@ -174,7 +175,7 @@
         false
       )
     )
-    (ok true)
+    true
   )
 )
 
@@ -212,11 +213,10 @@
     ;; Check if identity exists
     (asserts! (is-registered-identity caller) (err ERR-IDENTITY-NOT-FOUND))
     
-    ;; Get current identity
+    ;; Update identity
     (match (map-get? identities caller)
       current-identity 
       (begin
-        ;; Update identity
         (map-set identities caller 
           (merge current-identity { name: name, email: email })
         )
@@ -275,11 +275,10 @@
     ;; Check if identity exists
     (asserts! (is-registered-identity identity) (err ERR-IDENTITY-NOT-FOUND))
     
-    ;; Get current identity
+    ;; Update identity to verified
     (match (map-get? identities identity)
       current-identity 
       (begin
-        ;; Update identity
         (map-set identities identity 
           (merge current-identity { verified: true })
         )
@@ -302,11 +301,10 @@
     ;; Check if identity exists
     (asserts! (is-registered-identity identity) (err ERR-IDENTITY-NOT-FOUND))
     
-    ;; Get current identity
+    ;; Update reputation score
     (match (map-get? identities identity)
       current-identity 
       (begin
-        ;; Update identity
         (map-set identities identity 
           (merge current-identity { reputation-score: new-score })
         )
@@ -348,10 +346,8 @@
       }
     )
     
-    ;; Initialize history counter
+    ;; Initialize history counter and add first ownership record
     (map-set asset-history-counters asset-id u0)
-    
-    ;; Add first ownership record
     (add-to-ownership-history asset-id caller current-height)
     
     (ok asset-id)
@@ -375,11 +371,10 @@
     ;; Check if caller is asset owner
     (asserts! (is-asset-owner caller asset-id) (err ERR-NOT-ASSET-OWNER))
     
-    ;; Get current asset data
+    ;; Update asset details
     (match (map-get? assets asset-id)
       current-asset 
       (begin
-        ;; Update asset
         (map-set assets asset-id 
           (merge current-asset 
             { 
@@ -413,11 +408,10 @@
     ;; Check if new owner is a verified identity
     (asserts! (is-verified-identity new-owner) (err ERR-IDENTITY-NOT-VERIFIED))
     
-    ;; Get current asset data
+    ;; Transfer ownership
     (match (map-get? assets asset-id)
       current-asset 
       (begin
-        ;; Update asset owner
         (map-set assets asset-id 
           (merge current-asset 
             { 
@@ -460,9 +454,12 @@
     (asserts! (is-valid-claim-type claim-type) (err ERR-INVALID-CLAIM-TYPE))
     
     ;; Check if attester has sufficient reputation
-    (match (map-get? identities caller)
-      identity (asserts! (>= (get reputation-score identity) (var-get min-attestation-reputation)) (err ERR-INSUFFICIENT-REPUTATION))
-      (err ERR-IDENTITY-NOT-FOUND)
+    (let ((identity-opt (map-get? identities caller)))
+      (asserts! (is-some identity-opt) (err ERR-IDENTITY-NOT-FOUND))
+      (let ((identity (unwrap! identity-opt (err ERR-IDENTITY-NOT-FOUND))))
+        (asserts! (>= (get reputation-score identity) (var-get min-attestation-reputation)) 
+                  (err ERR-INSUFFICIENT-REPUTATION))
+      )
     )
     
     ;; Create attestation
@@ -487,19 +484,16 @@
       (caller tx-sender)
       (attestation-key { attester: caller, asset-id: asset-id, claim-type: claim-type })
     )
-    ;; Check if attestation exists
-    (asserts! (is-some (map-get? attestations attestation-key)) (err ERR-ATTESTATION-NOT-FOUND))
-    
-    ;; Get current attestation
-    (match (map-get? attestations attestation-key)
-      current-attestation 
-      (begin
+    ;; Check if attestation exists and get it
+    (let ((attestation-opt (map-get? attestations attestation-key)))
+      (asserts! (is-some attestation-opt) (err ERR-ATTESTATION-NOT-FOUND))
+      (let ((attestation (unwrap! attestation-opt (err ERR-ATTESTATION-NOT-FOUND))))
         ;; Check if attestation is already revoked
-        (asserts! (not (get revoked current-attestation)) (err ERR-ATTESTATION-ALREADY-REVOKED))
+        (asserts! (not (get revoked attestation)) (err ERR-ATTESTATION-ALREADY-REVOKED))
         
-        ;; Update attestation
+        ;; Revoke attestation
         (map-set attestations attestation-key 
-          (merge current-attestation 
+          (merge attestation 
             { 
               revoked: true,
               revocation-height: block-height
@@ -508,7 +502,6 @@
         )
         (ok true)
       )
-      (err ERR-ATTESTATION-NOT-FOUND)
     )
   )
 )
@@ -524,19 +517,16 @@
       (caller tx-sender)
       (attestation-key { attester: caller, asset-id: asset-id, claim-type: claim-type })
     )
-    ;; Check if attestation exists
-    (asserts! (is-some (map-get? attestations attestation-key)) (err ERR-ATTESTATION-NOT-FOUND))
-    
-    ;; Get current attestation
-    (match (map-get? attestations attestation-key)
-      current-attestation 
-      (begin
+    ;; Check if attestation exists and get it
+    (let ((attestation-opt (map-get? attestations attestation-key)))
+      (asserts! (is-some attestation-opt) (err ERR-ATTESTATION-NOT-FOUND))
+      (let ((attestation (unwrap! attestation-opt (err ERR-ATTESTATION-NOT-FOUND))))
         ;; Check if attestation is revoked
-        (asserts! (not (get revoked current-attestation)) (err ERR-ATTESTATION-ALREADY-REVOKED))
+        (asserts! (not (get revoked attestation)) (err ERR-ATTESTATION-ALREADY-REVOKED))
         
         ;; Update attestation
         (map-set attestations attestation-key 
-          (merge current-attestation 
+          (merge attestation 
             { 
               claim-value: claim-value,
               attestation-height: block-height
@@ -545,7 +535,6 @@
         )
         (ok true)
       )
-      (err ERR-ATTESTATION-NOT-FOUND)
     )
   )
 )
@@ -562,15 +551,6 @@
   (map-get? identity-attributes { principal: identity, attribute-name: attribute-name })
 )
 
-;; Check if an identity is verified
-(define-read-only (is-identity-verified (identity principal))
-  (default-to false (get verified (map-get? identities identity)))
-)
-
-;; Get the reputation score of an identity
-(define-read-only (get-reputation-score (identity principal))
-  (default-to u0 (get reputation-score (map-get? identities identity)))
-)
 
 ;; Get asset information
 (define-read-only (get-asset-details (asset-id uint))
@@ -579,7 +559,10 @@
 
 ;; Get the current owner of an asset
 (define-read-only (get-asset-owner (asset-id uint))
-  (get owner (map-get? assets asset-id))
+  (match (map-get? assets asset-id)
+    asset-data (ok (get owner asset-data))
+    (err ERR-ASSET-NOT-FOUND)
+  )
 )
 
 ;; Get a single entry from the ownership history
@@ -621,10 +604,8 @@
     ;; Only the contract deployer can initialize
     (asserts! (is-eq caller (var-get contract-owner)) (err ERR-UNAUTHORIZED))
     
-    ;; Set contract owner
+    ;; Set contract owner and min reputation
     (var-set contract-owner owner)
-    
-    ;; Set minimum reputation for attestations
     (var-set min-attestation-reputation min-reputation)
     
     (ok true)
